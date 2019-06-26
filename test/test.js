@@ -9,13 +9,15 @@ contract("Shrubs", function(accounts) {
         let totalStored = 0;
         let totalInserted = 0;
         let totalDeleted = 0;
+        let totalGasSpent = 0;
         const shrubs = await Shrubs.deployed();
         let historySize = await shrubs.HISTORY_SIZE();
         historySize = historySize.toNumber();
         for (let i = 0; i < historySize; i++) {
             // let nextToInsert = await shrubs.nextLeafToInsert();
             // nextToInsert = nextToInsert.toNumber();
-            // const gasEstimate = await shrubs.dummyInsertLeaf.estimateGas();
+            const gasEstimate = await shrubs.dummyInsertLeaf.estimateGas();
+            totalGasSpent += gasEstimate;
             // console.log("Inserting leaf " + nextToInsert + " costs " + gasEstimate.toString(10));
             let result = await shrubs.dummyInsertLeaf();
             let deleted = 0;
@@ -35,7 +37,8 @@ contract("Shrubs", function(accounts) {
         for (let i = 0; i < numInserts; i++) {
             // let nextToInsert = await shrubs.nextLeafToInsert();
             // nextToInsert = nextToInsert.toNumber();
-            // const gasEstimate = await shrubs.dummyInsertLeaf.estimateGas();
+            const gasEstimate = await shrubs.dummyInsertLeaf.estimateGas();
+            totalGasSpent += gasEstimate;
             // console.log("Inserting leaf " + nextToInsert + " costs " + gasEstimate.toString(10));
             let result = await shrubs.dummyInsertLeaf();
             let deleted = 0;
@@ -61,7 +64,8 @@ contract("Shrubs", function(accounts) {
             //     }
             // }
         }
-        console.log("Average inserts including leaf itself =" + totalStored/totalInserted);
-        console.log("Average deletes =" + totalDeleted/totalInserted);
+        console.log("Average inserts including leaf itself = " + totalStored/totalInserted);
+        console.log("Average deletes = " + totalDeleted/totalInserted);
+        console.log("Average gas per insert = " + totalGasSpent/totalInserted);
     });
 });
