@@ -51,12 +51,12 @@ contract Shrubs {
         nodes[getLeafIndex(currentLeaf)] = leafHash;
         emit Stored();
         nextLeafToInsert += 1;
-        calculateFrontierWitness(currentLeaf, leafHash);
+        calculateWitnessForNextFrontier(currentLeaf, leafHash);
         clearOldWitness(currentLeaf);
     }
     
-    function calculateFrontierWitness(uint64 insertedLeafIndex, bytes32 insertedHash) internal {
-        uint64[TREE_DEPTH] memory newFrontier = calculateFrontierPath(insertedLeafIndex + 1);
+    function calculateWitnessForNextFrontier(uint64 insertedLeafIndex, bytes32 insertedHash) internal {
+        uint64[TREE_DEPTH] memory nextFrontier = calculateFrontierPath(insertedLeafIndex + 1);
         uint64[TREE_DEPTH] memory insertedLeafPath = calculateFrontierPath(insertedLeafIndex);
         bytes32 h = insertedHash;
         for (uint256 i = 1; i < TREE_DEPTH; i++) {
@@ -64,7 +64,7 @@ contract Shrubs {
             bytes32 witness = nodes[witnessIndex];
             if (witness == bytes32(0)) {
                 // node at the previous level is empty node or empty leaf, so 
-                // this node valus can be recalculated
+                // this node value can be recalculated
                 break;
             }
             if (insertedLeafPath[i-1] & 1 == 0) {
@@ -73,7 +73,7 @@ contract Shrubs {
                 h = sha256(abi.encodePacked(witness, h));
             }
             uint128 thisNodeIndex = getNodeIndex(uint8(i), insertedLeafPath[i]);
-            if (newFrontier[i] - insertedLeafPath[i] == 1) {
+            if (nextFrontier[i] - insertedLeafPath[i] == 1) {
                 nodes[thisNodeIndex] = h;
                 emit Stored();
             }
@@ -111,14 +111,14 @@ contract Shrubs {
     //     return nodeIndexes[uint256(treeLevel)] + 1 == nodeIndex;
     // }
     
-    function getFrontier() public view returns (uint64[TREE_DEPTH] memory nodeIndexes, bytes32[TREE_DEPTH] memory shrubs) {
+    function getFrontier() public view returns (uint64[TREE_DEPTH] memory nodeIndexes, bytes32[TREE_DEPTH] memory nodeHashes) {
         uint64 frontierPointer = nextLeafToInsert - 1;
         nodeIndexes[0] = frontierPointer;
-        shrubs[0] = getLeafHash(frontierPointer);
+        nodeHashes[0] = getLeafHash(frontierPointer);
         for (uint256 i = 1; i < TREE_DEPTH; i++) {
             frontierPointer = frontierPointer >> 1;
             nodeIndexes[i] = frontierPointer;
-            shrubs[i] = getNodeHash(uint8(i), frontierPointer);
+            nodeHashes[i] = getNodeHash(uint8(i), frontierPointer);
         }
     }
 }
