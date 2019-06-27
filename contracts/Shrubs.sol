@@ -10,7 +10,10 @@ contract Shrubs {
 
     event Stored();
     event Deleted();
-    
+    event GasLeft(uint256 gas);
+    event CleanupFor(uint64 frontierIndex);
+    event WentBackwards();
+
     // tree levels are enumerated from the leaf level, and leafs are "level 0"
     constructor() public {
         
@@ -47,23 +50,31 @@ contract Shrubs {
     }
     
     function insertLeaf(bytes32 leafHash) public {
+        // emit GasLeft(gasleft());
         uint64 currentLeaf = nextLeafToInsert;
         nodes[getLeafIndex(currentLeaf)] = leafHash;
         emit Stored();
         nextLeafToInsert += 1;
-        calculateWitnessForNextFrontier(currentLeaf, leafHash);
+        // emit GasLeft(gasleft());
+        prepareWitnessForNextFrontier(currentLeaf, leafHash);
+        // emit GasLeft(gasleft());
         clearOldWitness(currentLeaf);
+        // emit GasLeft(gasleft());
     }
     
-    function calculateWitnessForNextFrontier(uint64 insertedLeafIndex, bytes32 insertedHash) internal {
-        uint64[TREE_DEPTH] memory nextFrontier = calculateFrontierPath(insertedLeafIndex + 1);
-        uint64[TREE_DEPTH] memory insertedLeafPath = calculateFrontierPath(insertedLeafIndex);
+    function prepareWitnessForNextFrontier(uint64 insertedLeafIndex, bytes32 insertedHash) internal {
+        uint64[TREE_DEPTH] memory nextFrontier = calculatePath(insertedLeafIndex + 1);
+        uint64[TREE_DEPTH] memory insertedLeafPath = calculatePath(insertedLeafIndex);
         bytes32 h = insertedHash;
         for (uint256 i = 1; i < TREE_DEPTH; i++) {
-            uint128 witnessIndex = getNodeIndex(uint8(i-1), insertedLeafPath[i-1]);
+            // get another child for this node
+            uint128 witnessIndex = getNodeIndex(uint8(i-1), insertedLeafPath[i-1] ^ 1);
             bytes32 witness = nodes[witnessIndex];
+            // value of another child may be empty
             if (witness == bytes32(0)) {
-                // node at the previous level is empty node or empty leaf, so 
+                // it can happed only if inserted child is left
+                assert(insertedLeafPath[i-1] & 1 == 0);
+                // node at the previous level is empty node or empty leaf, so
                 // this node value can be recalculated
                 break;
             }
@@ -73,32 +84,65 @@ contract Shrubs {
                 h = sha256(abi.encodePacked(witness, h));
             }
             uint128 thisNodeIndex = getNodeIndex(uint8(i), insertedLeafPath[i]);
-            if (nextFrontier[i] - insertedLeafPath[i] == 1) {
+            // one should only write value into this node if it's a "shrub" for a next frontier
+            // and that inserted node is a left child
+            if (nextFrontier[i] - insertedLeafPath[i] == 1 && insertedLeafPath[i] & 1 == 0) {
                 nodes[thisNodeIndex] = h;
                 emit Stored();
             }
         }
     }
-    
+
     function clearOldWitness(uint64 lastInserted) internal {
         if (lastInserted < HISTORY_SIZE) {
             return;
         }
-        uint64 historicalFontierPointer = lastInserted - HISTORY_SIZE;
-        uint64[TREE_DEPTH] memory currentFrontier = calculateFrontierPath(lastInserted);
-        uint64[TREE_DEPTH] memory oldFrontier = calculateFrontierPath(historicalFontierPointer);
+        uint64 historicalFontierPointer = lastInserted - HISTORY_SIZE + 1;
+        uint64[TREE_DEPTH] memory currentFrontier = calculatePath(lastInserted);
+        // this is a last frontier to keep
+        uint64[TREE_DEPTH] memory oldestHistoricalFrontier = calculatePath(historicalFontierPointer);
+        emit CleanupFor(historicalFontierPointer - 1);
         for (uint256 i = 1; i < TREE_DEPTH; i++) {
-            if (currentFrontier[i] - oldFrontier[i] > 1) {
-                uint128 nodeIndex = getNodeIndex(uint8(i), oldFrontier[i]);
-                if (nodes[nodeIndex] != bytes32(0)) {
-                    delete nodes[nodeIndex];
-                    emit Deleted();
+            uint64 oldFrontierIndex = oldestHistoricalFrontier[i];
+            if (oldFrontierIndex == currentFrontier[i]) {
+                // point of merging with a current one
+                // so stop cleaning cause shrubs for this frontier
+                // are also shrubs for the newest one
+                break;
+            }
+            if (oldFrontierIndex & 1 == 0) {
+                // this frontier leaf is a left child for a next one,
+                // so one on a left at the same level can be deleted
+                // cause it's not necessary for recalculation of the parent
+                if (oldFrontierIndex > 0) {
+                    uint128 nodeIndex = getNodeIndex(uint8(i), oldFrontierIndex-1);
+                    if (nodes[nodeIndex] != bytes32(0)) {
+                        delete nodes[nodeIndex];
+                        emit Deleted();
+                    }
+                }
+                if (oldFrontierIndex > 1) {
+                    uint128 nodeIndex = getNodeIndex(uint8(i), oldFrontierIndex-2);
+                    if (nodes[nodeIndex] != bytes32(0)) {
+                        delete nodes[nodeIndex];
+                        emit Deleted();
+                    }
+                }
+            } else {
+                // this frontier leaf is a right child for for a next one,
+                // so left one may be required for recalculation
+                if (oldFrontierIndex > 1) {
+                    uint128 nodeIndex = getNodeIndex(uint8(i), oldFrontierIndex-2);
+                    if (nodes[nodeIndex] != bytes32(0)) {
+                        delete nodes[nodeIndex];
+                        emit Deleted();
+                    }
                 }
             }
         }
     }
     
-    function calculateFrontierPath(uint64 frontierPointer) public pure returns (uint64[TREE_DEPTH] memory nodeIndexes) {
+    function calculatePath(uint64 frontierPointer) public pure returns (uint64[TREE_DEPTH] memory nodeIndexes) {
         nodeIndexes[0] = frontierPointer;
         uint64 path = frontierPointer;
         for (uint256 i = 1; i < TREE_DEPTH; i++) {
@@ -106,19 +150,57 @@ contract Shrubs {
             nodeIndexes[i] = path;
         }
     }
+
+    function haveShrubsForFrontierPointer(uint64 frontierPointer) public view returns (bool haveShrubs) {
+        return frontierPointer >= nextLeafToInsert - HISTORY_SIZE;
+    }
     
-    // function isNearFrontier(uint64[TREE_DEPTH] memory nodeIndexes, uint8 treeLevel, uint64 nodeIndex) public pure returns (bool isNear) {
-    //     return nodeIndexes[uint256(treeLevel)] + 1 == nodeIndex;
-    // }
-    
-    function getFrontier() public view returns (uint64[TREE_DEPTH] memory nodeIndexes, bytes32[TREE_DEPTH] memory nodeHashes) {
-        uint64 frontierPointer = nextLeafToInsert - 1;
+    // get frontier for anchoring for a particular state.
+    // state is enumerated using "nextToInsert"
+    function getFrontierByIndex(uint64 frontierIndex) public view returns (uint64[TREE_DEPTH] memory nodeIndexes, bytes32[TREE_DEPTH] memory nodeHashes) {
+        assert(haveShrubsForFrontierPointer(frontierIndex));
+        assert(frontierIndex < nextLeafToInsert);
+        uint64 frontierPointer = frontierIndex;
         nodeIndexes[0] = frontierPointer;
         nodeHashes[0] = getLeafHash(frontierPointer);
         for (uint256 i = 1; i < TREE_DEPTH; i++) {
+            uint64 previousPointer = frontierPointer;
             frontierPointer = frontierPointer >> 1;
             nodeIndexes[i] = frontierPointer;
-            nodeHashes[i] = getNodeHash(uint8(i), frontierPointer);
+            // TODO: MUST NOT pick into newer nodes
+            bytes32 nodeHash = getNodeHash(uint8(i), frontierPointer);
+            if (nodeHash == bytes32(0)) {
+                // node is not stores, so it's recalculatable
+                // if (i == 1) {
+                //     bytes32 witness = getLeafHash(previousPointer);
+                //     nodeHash = sha256(abi.encodePacked(nodeHashes[i-1], witness));
+                // } else {
+                //     bytes32 witness = getEmptyNodeHash(uint8(i-1));
+                //     nodeHash = sha256(abi.encodePacked(nodeHashes[i-1], witness));
+                // }
+                // node value must be recalculated
+                uint128 witnessIndex = getNodeIndex(uint8(i-1), previousPointer ^ 1);
+                bytes32 witness = nodes[witnessIndex];
+                if (previousPointer & 1 == 0) {
+                    if (i == 1) {
+                        witness = getLeafHash(previousPointer);
+                    } else {
+                        witness = getEmptyNodeHash(uint8(i-1));
+                    }
+                }
+                // bytes32 witness = nodes[witnessIndex];
+                // if (witness == bytes32(0)) {
+                //     // previous level node should be left child
+                //     assert(previousPointer & 1 == 0);
+                //     witness = getEmptyNodeHash(uint8(i-1));
+                // }
+                if (previousPointer & 1 == 0) {
+                    nodeHash = sha256(abi.encodePacked(nodeHashes[i-1], witness));
+                } else {
+                    nodeHash = sha256(abi.encodePacked(witness, nodeHashes[i-1]));
+                }
+            }
+            nodeHashes[i] = nodeHash;
         }
     }
 }
